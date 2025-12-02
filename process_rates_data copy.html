@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rates Data Processor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .file-input-container {
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            border: 2px dashed #ddd;
+        }
+        input[type="file"] {
+            margin-bottom: 10px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+        }
+        td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:nth-child(even):hover {
+            background-color: #f0f0f0;
+        }
+        .date-column {
+            min-width: 120px;
+        }
+        .rate-column {
+            text-align: right;
+            min-width: 100px;
+        }
+        .summary {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            border-radius: 4px;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-top: 20px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            background-color: #f1f1f1;
+            border: none;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+            margin-right: 5px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s;
+        }
+        .tab:hover {
+            background-color: #e0e0e0;
+        }
+        .tab.active {
+            background-color: #4CAF50;
+            color: white;
+            border-bottom: 2px solid #4CAF50;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Rates Data Processor</h1>
+        
+        <div class="file-input-container">
+            <label for="excelFile">Select Excel File (rates_data.xlsx):</label><br>
+            <input type="file" id="excelFile" accept=".xlsx,.xls" />
+            <div id="status" class="status"></div>
+        </div>
+
+        <div id="summary" class="summary" style="display: none;">
+            <strong>Summary:</strong> <span id="summaryText"></span>
+        </div>
+
+        <div id="tabsContainer" style="display: none;">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('daily')">Daily Data</button>
+                <button class="tab" onclick="switchTab('monthly')">Monthly Averages</button>
+            </div>
+            
+            <div id="dailyTab" class="tab-content active">
+                <div id="tableContainer"></div>
+            </div>
+            
+            <div id="monthlyTab" class="tab-content">
+                <div id="monthlyTableContainer"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Store processed data globally
+        let globalProcessedData = [];
+
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            if (tabName === 'daily') {
+                document.getElementById('dailyTab').classList.add('active');
+                document.querySelectorAll('.tab')[0].classList.add('active');
+            } else if (tabName === 'monthly') {
+                document.getElementById('monthlyTab').classList.add('active');
+                document.querySelectorAll('.tab')[1].classList.add('active');
+                calculateMonthlyAverages();
+            }
+        }
+
+        function parseDate(value) {
+            if (!value && value !== 0) return null;
+            
+            let date;
+            
+            if (typeof value === 'number') {
+                const excelEpoch = new Date(1899, 11, 30);
+                date = new Date(excelEpoch.getTime() + (value - 0) * 86400000);
+            } else if (value instanceof Date) {
+                date = value;
+            } else if (typeof value === 'string') {
+                date = new Date(value);
+            } else {
+                return null;
+            }
+            
+            if (isNaN(date.getTime())) {
+                return null;
+            }
+            
+            return date;
+        }
+
+        function calculateMonthlyAverages() {
+            if (globalProcessedData.length === 0) {
+                document.getElementById('monthlyTableContainer').innerHTML = '<p>No data available. Please load the Excel file first.</p>';
+                return;
+            }
+
+            // Group data by year-month
+            const monthlyData = {};
+            
+            globalProcessedData.forEach(row => {
+                const date = parseDate(row.date);
+                if (!date) return;
+                
+                const year = date.getFullYear();
+                const month = date.getMonth() + 1; // 1-12
+                const key = `${year}-${String(month).padStart(2, '0')}`;
+                
+                if (!monthlyData[key]) {
+                    monthlyData[key] = {
+                        year: year,
+                        month: month,
+                        hkdValues: [],
+                        usdValues: []
+                    };
+                }
+                
+                // Only include non-empty, valid numeric values
+                if (row.hkd !== null && row.hkd !== undefined && row.hkd !== '') {
+                    const hkdNum = typeof row.hkd === 'number' ? row.hkd : parseFloat(row.hkd);
+                    if (!isNaN(hkdNum)) {
+                        monthlyData[key].hkdValues.push(hkdNum);
+                    }
+                }
+                
+                if (row.usd !== null && row.usd !== undefined && row.usd !== '') {
+                    const usdNum = typeof row.usd === 'number' ? row.usd : parseFloat(row.usd);
+                    if (!isNaN(usdNum)) {
+                        monthlyData[key].usdValues.push(usdNum);
+                    }
+                }
+            });
+            
+            // Calculate averages and sort by date
+            const monthlyAverages = Object.keys(monthlyData)
+                .map(key => {
+                    const data = monthlyData[key];
+                    const hkdAvg = data.hkdValues.length > 0 
+                        ? data.hkdValues.reduce((sum, val) => sum + val, 0) / data.hkdValues.length 
+                        : null;
+                    const usdAvg = data.usdValues.length > 0 
+                        ? data.usdValues.reduce((sum, val) => sum + val, 0) / data.usdValues.length 
+                        : null;
+                    
+                    return {
+                        year: data.year,
+                        month: data.month,
+                        monthKey: key,
+                        hkdAverage: hkdAvg,
+                        usdAverage: usdAvg,
+                        hkdCount: data.hkdValues.length,
+                        usdCount: data.usdValues.length
+                    };
+                })
+                .sort((a, b) => {
+                    // Sort by year, then by month
+                    if (a.year !== b.year) {
+                        return a.year - b.year;
+                    }
+                    return a.month - b.month;
+                });
+            
+            // Display monthly averages table
+            let tableHTML = '<table><thead><tr>';
+            tableHTML += '<th class="date-column">Year-Month</th>';
+            tableHTML += '<th class="rate-column">HKD Average</th>';
+            tableHTML += '<th class="rate-column">HKD Count</th>';
+            tableHTML += '<th class="rate-column">USD Average</th>';
+            tableHTML += '<th class="rate-column">USD Count</th>';
+            tableHTML += '</tr></thead><tbody>';
+            
+            monthlyAverages.forEach(row => {
+                const monthName = new Date(row.year, row.month - 1, 1).toLocaleString('default', { month: 'short' });
+                tableHTML += '<tr>';
+                tableHTML += `<td class="date-column">${row.year}-${String(row.month).padStart(2, '0')} (${monthName})</td>`;
+                tableHTML += `<td class="rate-column">${row.hkdAverage !== null ? formatRate(row.hkdAverage) : ''}</td>`;
+                tableHTML += `<td class="rate-column">${row.hkdCount}</td>`;
+                tableHTML += `<td class="rate-column">${row.usdAverage !== null ? formatRate(row.usdAverage) : ''}</td>`;
+                tableHTML += `<td class="rate-column">${row.usdCount}</td>`;
+                tableHTML += '</tr>';
+            });
+            
+            tableHTML += '</tbody></table>';
+            document.getElementById('monthlyTableContainer').innerHTML = tableHTML;
+        }
+
+        function isDate(value) {
+            if (!value && value !== 0) return false;
+            
+            // Check if it's a Date object
+            if (value instanceof Date) {
+                return !isNaN(value.getTime());
+            }
+            
+            // Check if it's a number (Excel date serial number)
+            if (typeof value === 'number') {
+                // Excel dates are numbers where 1 = 1900-01-01
+                // Valid range: 1 to ~2958465 (year 9999)
+                // Also check if it's a reasonable date (between 1900 and 2100)
+                if (value > 0 && value < 3000000) {
+                    // Convert to date to verify it's valid
+                    const excelEpoch = new Date(1899, 11, 30);
+                    const date = new Date(excelEpoch.getTime() + (value - 0) * 86400000);
+                    const year = date.getFullYear();
+                    // Accept dates between 1900 and 2100
+                    if (year >= 1900 && year <= 2100) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            
+            // Check if it's a string that looks like a date
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (trimmed === '') return false;
+                
+                // Try common date formats
+                const datePatterns = [
+                    /^\d{4}-\d{1,2}-\d{1,2}$/,      // YYYY-MM-DD or YYYY-M-D
+                    /^\d{1,2}\/\d{1,2}\/\d{4}$/,    // MM/DD/YYYY or M/D/YYYY
+                    /^\d{4}\/\d{1,2}\/\d{1,2}$/,    // YYYY/MM/DD or YYYY/M/D
+                    /^\d{1,2}-\d{1,2}-\d{4}$/,      // MM-DD-YYYY or M-D-YYYY
+                    /^\d{1,2}\.\d{1,2}\.\d{4}$/,    // MM.DD.YYYY or M.D.YYYY
+                ];
+                
+                for (let pattern of datePatterns) {
+                    if (pattern.test(trimmed)) {
+                        const date = new Date(trimmed);
+                        if (!isNaN(date.getTime())) {
+                            const year = date.getFullYear();
+                            // Accept dates between 1900 and 2100
+                            if (year >= 1900 && year <= 2100) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        }
+
+        function formatDate(value) {
+            if (!value && value !== 0) return '';
+            
+            let date;
+            
+            // Handle Excel date serial number
+            if (typeof value === 'number') {
+                // Excel epoch starts from 1900-01-01, but Excel incorrectly treats 1900 as a leap year
+                // Excel date 1 = 1900-01-01
+                // Excel epoch: December 30, 1899 (day 0 in Excel)
+                // Use local time to match Excel's display
+                const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 in local time
+                date = new Date(excelEpoch.getTime() + (value - 0) * 86400000);
+                
+                // Use local time methods to match Excel display
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            } else if (value instanceof Date) {
+                date = value;
+                // Use local time methods for Date objects (XLSX may have already converted)
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            } else if (typeof value === 'string') {
+                // For string dates, parse as local time
+                const parsedDate = new Date(value);
+                if (!isNaN(parsedDate.getTime())) {
+                    const year = parsedDate.getFullYear();
+                    const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
+                    const day = String(parsedDate.getDate()).padStart(2, '0');
+                    return `${year}-${month}-${day}`;
+                }
+                return value; // Return as-is if not a valid date
+            } else {
+                return String(value);
+            }
+        }
+
+        function formatRate(value) {
+            if (value === null || value === undefined || value === '') {
+                return '';
+            }
+            const num = typeof value === 'number' ? value : parseFloat(value);
+            if (isNaN(num)) {
+                return '';
+            }
+            return num.toFixed(4);
+        }
+
+        function processExcelData(data) {
+            const tableContainer = document.getElementById('tableContainer');
+            const statusDiv = document.getElementById('status');
+            const summaryDiv = document.getElementById('summary');
+            const summaryText = document.getElementById('summaryText');
+            
+            try {
+                // Parse the Excel file
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                
+                // Start extracting from row 9
+                // Extract columns A, B, and D
+                // Filter out rows where column A does not contain a date format
+                const processedData = [];
+                const startRow = 9; // Start from Excel row 9
+                let currentRow = startRow;
+                let hasData = true;
+                
+                // Read data row by row starting from row 9
+                while (hasData) {
+                    // Get cell references: A{row}, B{row}, D{row}
+                    const cellA = worksheet['A' + currentRow];
+                    const cellB = worksheet['B' + currentRow];
+                    const cellD = worksheet['D' + currentRow];
+                    
+                    // Check if we've reached the end of data (no more cells in column A)
+                    if (!cellA && !cellB && !cellD) {
+                        hasData = false;
+                        break;
+                    }
+                    
+                    // Extract values from cells
+                    const colA = cellA ? (cellA.v !== undefined ? cellA.v : null) : null;
+                    const colB = cellB ? (cellB.v !== undefined ? cellB.v : null) : null;
+                    const colD = cellD ? (cellD.v !== undefined ? cellD.v : null) : null;
+                    
+                    // Only include rows where column A contains a date format
+                    if (isDate(colA)) {
+                        processedData.push({
+                            date: colA,
+                            hkd: colB,
+                            usd: colD
+                        });
+                    }
+                    
+                    currentRow++;
+                    
+                    // Safety limit to prevent infinite loops
+                    if (currentRow > 100000) {
+                        break;
+                    }
+                }
+                
+                // Store processed data globally
+                globalProcessedData = processedData;
+                
+                // Display summary
+                summaryText.textContent = `Found ${processedData.length} rows with valid dates (starting from row 9)`;
+                summaryDiv.style.display = 'block';
+                
+                // Show tabs container
+                document.getElementById('tabsContainer').style.display = 'block';
+                
+                // Create daily data table
+                let tableHTML = '<table><thead><tr>';
+                tableHTML += '<th class="date-column">Date</th>';
+                tableHTML += '<th class="rate-column">HKD</th>';
+                tableHTML += '<th class="rate-column">USD</th>';
+                tableHTML += '</tr></thead><tbody>';
+                
+                processedData.forEach(row => {
+                    tableHTML += '<tr>';
+                    tableHTML += `<td class="date-column">${formatDate(row.date)}</td>`;
+                    tableHTML += `<td class="rate-column">${formatRate(row.hkd)}</td>`;
+                    tableHTML += `<td class="rate-column">${formatRate(row.usd)}</td>`;
+                    tableHTML += '</tr>';
+                });
+                
+                tableHTML += '</tbody></table>';
+                tableContainer.innerHTML = tableHTML;
+                
+                // Calculate and display monthly averages in the monthly tab
+                calculateMonthlyAverages();
+                
+                // Show success message
+                statusDiv.textContent = `Successfully processed ${processedData.length} rows`;
+                statusDiv.className = 'status success';
+                statusDiv.style.display = 'block';
+                
+            } catch (error) {
+                statusDiv.textContent = `Error processing file: ${error.message}`;
+                statusDiv.className = 'status error';
+                statusDiv.style.display = 'block';
+                tableContainer.innerHTML = '';
+                summaryDiv.style.display = 'none';
+            }
+        }
+
+        document.getElementById('excelFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                processExcelData(data);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+    </script>
+</body>
+</html>
